@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FocusGuard — on-device focus monitor</title>
+<meta name="description" content="A focus and presence monitor that runs entirely on your device. No video, keystrokes, or browsing data ever leaves the browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #F4F6F4;
+    --panel: #FFFFFF;
+    --ink: #16211D;
+    --ink-soft: #566159;
+    --line: #DCE3DD;
+    --teal: #0F6E56;
+    --teal-soft: #E1F5EE;
+    --teal-mid: #5DCAA5;
+    --amber: #BA7517;
+    --amber-soft: #FAEEDA;
+    --red: #A32D2D;
+    --red-soft: #FCEBEB;
+    --radius: 14px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    min-height:100vh;
+  }
+  .mono{font-family:'JetBrains Mono',monospace;}
+  h1,h2,h3{font-family:'Space Grotesk',sans-serif;margin:0;font-weight:600;}
+
+  /* ---------- Consent gate ---------- */
+  #gate{
+    position:fixed;inset:0;background:var(--bg);
+    display:flex;align-items:center;justify-content:center;
+    z-index:50;padding:24px;
+  }
+  .gate-card{
+    max-width:520px;width:100%;background:var(--panel);
+    border:1px solid var(--line);border-radius:var(--radius);
+    padding:40px;
+  }
+  .gate-card .eyebrow{
+    font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.06em;
+    color:var(--teal);text-transform:uppercase;margin-bottom:14px;display:block;
+  }
+  .gate-card h1{font-size:28px;line-height:1.2;margin-bottom:16px;}
+  .gate-card p{color:var(--ink-soft);line-height:1.6;font-size:15px;margin:0 0 12px;}
+  .consent-list{list-style:none;padding:0;margin:20px 0;display:flex;flex-direction:column;gap:10px;}
+  .consent-list li{
+    display:flex;gap:10px;align-items:flex-start;font-size:14px;color:var(--ink);
+    line-height:1.5;
+  }
+  .consent-list li::before{content:"✓";color:var(--teal);font-weight:700;flex-shrink:0;}
+  #start-btn{
+    margin-top:22px;width:100%;padding:14px 20px;border:none;border-radius:9px;
+    background:var(--teal);color:#fff;font-family:'Space Grotesk',sans-serif;
+    font-weight:600;font-size:15px;cursor:pointer;transition:background .15s;
+  }
+  #start-btn:hover{background:#0C5945;}
+  #start-btn:focus-visible{outline:2px solid var(--teal);outline-offset:3px;}
+  #gate-error{color:var(--red);font-size:13px;margin-top:12px;display:none;}
+
+  /* ---------- Main layout ---------- */
+  #app{display:none;max-width:1100px;margin:0 auto;padding:28px 20px 60px;}
+  header.top{
+    display:flex;justify-content:space-between;align-items:center;
+    padding-bottom:22px;margin-bottom:26px;border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex;align-items:center;gap:10px;}
+  .brand-mark{width:10px;height:10px;border-radius:50%;background:var(--teal);}
+  .brand h1{font-size:18px;}
+  .session-time{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--ink-soft);}
+
+  .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:20px;}
+  @media (max-width:800px){.grid{grid-template-columns:1fr;}}
+
+  .panel{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:24px;
+  }
+  .panel h2{font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);margin-bottom:18px;font-family:'JetBrains Mono',monospace;font-weight:500;}
+
+  /* Gauge */
+  .gauge-row{display:flex;align-items:center;gap:24px;}
+  .gauge-wrap{position:relative;width:150px;height:150px;flex-shrink:0;}
+  .gauge-num{
+    position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;
+  }
+  .gauge-num .pct{font-family:'Space Grotesk',sans-serif;font-size:34px;font-weight:700;line-height:1;}
+  .gauge-num .lbl{font-size:11px;color:var(--ink-soft);margin-top:4px;text-transform:uppercase;letter-spacing:.05em;}
+  .gauge-state{font-size:14px;line-height:1.6;color:var(--ink-soft);}
+  .gauge-state b{color:var(--ink);font-weight:600;}
+
+  /* Camera */
+  .cam-box{
+    position:relative;width:100%;aspect-ratio:4/3;border-radius:10px;
+    overflow:hidden;background:#0d1512;margin-top:18px;
+  }
+  video, canvas.overlay{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  video{transform:scaleX(-1);}
+  canvas.overlay{transform:scaleX(-1);}
+  .cam-toggle{
+    margin-top:10px;display:flex;align-items:center;justify-content:space-between;
+    font-size:13px;color:var(--ink-soft);
+  }
+  .cam-toggle button{
+    background:none;border:1px solid var(--line);border-radius:6px;padding:6px 10px;
+    font-size:12px;font-family:'JetBrains Mono',monospace;cursor:pointer;color:var(--ink);
+  }
+
+  /* Sparkline */
+  #spark{width:100%;height:70px;display:block;margin-top:6px;}
+
+  /* Stats grid */
+  .stats{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px;}
+  .stat{border:1px solid var(--line);border-radius:9px;padding:12px 14px;}
+  .stat .v{font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:500;}
+  .stat .k{font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em;margin-top:2px;}
+
+  /* Privacy signature panel */
+  .privacy-panel{background:var(--teal-soft);border-color:var(--teal-mid);}
+  .privacy-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px dashed rgba(15,110,86,.25);}
+  .privacy-row:last-child{border-bottom:none;}
+  .privacy-row .k{font-size:13px;color:#0C5945;}
+  .privacy-row .v{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:500;color:#04342C;}
+  .pulse{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--teal);margin-right:7px;animation:pulse 2s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+  @media (prefers-reduced-motion: reduce){.pulse{animation:none;}}
+
+  /* Event log */
+  .log{max-height:220px;overflow-y:auto;display:flex;flex-direction:column-reverse;gap:8px;}
+  .log-entry{
+    display:flex;gap:10px;align-items:flex-start;font-size:13px;padding:9px 11px;
+    border-radius:8px;border:1px solid var(--line);
+  }
+  .log-entry.warn{background:var(--amber-soft);border-color:#F0C98A;}
+  .log-entry.info{background:var(--bg);}
+  .log-entry .t{font-family:'JetBrains Mono',monospace;color:var(--ink-soft);font-size:11px;flex-shrink:0;margin-top:1px;}
+  .log-empty{color:var(--ink-soft);font-size:13px;padding:10px 2px;}
+
+  footer.note{
+    margin-top:28px;font-size:12px;color:var(--ink-soft);line-height:1.6;
+    border-top:1px solid var(--line);padding-top:16px;
+  }
+</style>
+</head>
+<body>
+
+<!-- Consent gate: nothing starts until the person explicitly agrees -->
+<div id="gate">
+  <div class="gate-card">
+    <span class="eyebrow">FocusGuard · on-device prototype</span>
+    <h1>Your focus, measured on your machine only</h1>
+    <p>This demo estimates presence and attention from your webcam and tab activity — entirely inside this browser tab.</p>
+    <ul class="consent-list">
+      <li>Video frames are analyzed locally and immediately discarded — none are recorded or uploaded</li>
+      <li>Only a rolling focus score and event log are kept, and only in this tab's memory</li>
+      <li>No network requests are made once the page loads — you can verify this in your browser's network tab</li>
+      <li>Closing this tab erases everything</li>
+    </ul>
+    <button id="start-btn">Enable camera and start session</button>
+    <div id="gate-error"></div>
+  </div>
+</div>
+
+<div id="app">
+  <header class="top">
+    <div class="brand">
+      <span class="brand-mark"></span>
+      <h1>FocusGuard</h1>
+    </div>
+    <div class="session-time mono">Session <span id="session-clock">00:00</span></div>
+  </header>
+
+  <div class="grid">
+    <!-- Left column -->
+    <div style="display:flex;flex-direction:column;gap:20px;">
+      <div class="panel">
+        <h2>Live focus</h2>
+        <div class="gauge-row">
+          <div class="gauge-wrap">
+            <svg width="150" height="150" viewBox="0 0 150 150">
+              <circle cx="75" cy="75" r="62" fill="none" stroke="#E4E9E3" stroke-width="12"/>
+              <circle id="gauge-arc" cx="75" cy="75" r="62" fill="none" stroke="var(--teal)" stroke-width="12"
+                stroke-linecap="round" stroke-dasharray="389.6" stroke-dashoffset="389.6"
+                transform="rotate(-90 75 75)" style="transition:stroke-dashoffset .6s ease, stroke .4s ease;"/>
+            </svg>
+            <div class="gauge-num">
+              <span class="pct mono" id="gauge-pct">—</span>
+              <span class="lbl">focus</span>
+            </div>
+          </div>
+          <div class="gauge-state">
+            <div id="gauge-headline"><b>Waiting for signal…</b></div>
+            <div id="gauge-sub" style="margin-top:4px;">Look at the screen to begin calibrating.</div>
+          </div>
+        </div>
+
+        <div class="cam-box">
+          <video id="video" autoplay muted playsinline></video>
+          <canvas id="overlay" class="overlay"></canvas>
+        </div>
+        <div class="cam-toggle">
+          <span>Preview is local-only — never transmitted</span>
+          <button id="toggle-cam">Hide preview</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Focus over session</h2>
+        <canvas id="spark"></canvas>
+        <div class="stats">
+          <div class="stat"><div class="v mono" id="stat-avg">—</div><div class="k">Avg. focus</div></div>
+          <div class="stat"><div class="v mono" id="stat-present">—</div><div class="k">Time present</div></div>
+          <div class="stat"><div class="v mono" id="stat-switches">0</div><div class="k">Tab switches</div></div>
+          <div class="stat"><div class="v mono" id="stat-anomalies">0</div><div class="k">Anomalies flagged</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right column -->
+    <div style="display:flex;flex-direction:column;gap:20px;">
+      <div class="panel privacy-panel">
+        <h2 style="color:#0C5945;">Privacy status</h2>
+        <div class="privacy-row"><span class="k"><span class="pulse"></span>Frames processed on-device</span><span class="v" id="priv-frames">0</span></div>
+        <div class="privacy-row"><span class="k">Bytes sent to any server</span><span class="v" id="priv-bytes">0 B</span></div>
+        <div class="privacy-row"><span class="k">Raw video stored</span><span class="v">Never</span></div>
+        <div class="privacy-row"><span class="k">Keystroke content read</span><span class="v">Never</span></div>
+      </div>
+
+      <div class="panel">
+        <h2>Event log</h2>
+        <div class="log" id="log">
+          <div class="log-empty">Events will appear here as they happen.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="note">
+    Prototype for the FocusGuard AI project — Phase&nbsp;1 (on-device focus detection). Head-pose and presence are estimated with MediaPipe Face Mesh, running fully client-side. This is a demonstration of the architecture's privacy claim, not a clinical or disciplinary tool — treat scores as directional, not authoritative.
+  </footer>
+</div>
+
+<!-- MediaPipe Face Mesh (runs fully client-side; only used for on-device landmark inference) -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- State ----------
+  const state = {
+    running: false,
+    startTime: null,
+    frameCount: 0,
+    focusHistory: [],       // {t, score}
+    tabSwitches: 0,
+    anomalies: 0,
+    presentSeconds: 0,
+    totalSeconds: 0,
+    lastVisible: true,
+    smoothedScore: 0,
+    lowFocusStreak: 0,
+    camVisible: true,
+  };
+
+  const els = {
+    gate: document.getElementById('gate'),
+    app: document.getElementById('app'),
+    startBtn: document.getElementById('start-btn'),
+    gateError: document.getElementById('gate-error'),
+    video: document.getElementById('video'),
+    overlay: document.getElementById('overlay'),
+    gaugeArc: document.getElementById('gauge-arc'),
+    gaugePct: document.getElementById('gauge-pct'),
+    gaugeHeadline: document.getElementById('gauge-headline'),
+    gaugeSub: document.getElementById('gauge-sub'),
+    spark: document.getElementById('spark'),
+    statAvg: document.getElementById('stat-avg'),
+    statPresent: document.getElementById('stat-present'),
+    statSwitches: document.getElementById('stat-switches'),
+    statAnomalies: document.getElementById('stat-anomalies'),
+    privFrames: document.getElementById('priv-frames'),
+    log: document.getElementById('log'),
+    sessionClock: document.getElementById('session-clock'),
+    toggleCam: document.getElementById('toggle-cam'),
+    camBox: document.querySelector('.cam-box'),
+  };
+
+  const CIRC = 2 * Math.PI * 62; // matches r=62 in the SVG gauge
+
+  // ---------- Logging ----------
+  function logEvent(text, level){
+    const empty = els.log.querySelector('.log-empty');
+    if (empty) empty.remove();
+    const entry = document.createElement('div');
+    entry.className = 'log-entry ' + (level || 'info');
+    const t = document.createElement('span');
+    t.className = 't mono';
+    t.textContent = elapsedClock();
+    const msg = document.createElement('span');
+    msg.textContent = text;
+    entry.appendChild(t);
+    entry.appendChild(msg);
+    els.log.appendChild(entry);
+    while (els.log.children.length > 40) els.log.removeChild(els.log.firstChild);
+  }
+
+  function elapsedClock(){
+    if (!state.startTime) return '00:00';
+    const s = Math.floor((Date.now() - state.startTime) / 1000);
+    const m = Math.floor(s / 60).toString().padStart(2,'0');
+    const ss = (s % 60).toString().padStart(2,'0');
+    return m + ':' + ss;
+  }
+
+  // ---------- Gauge / UI update ----------
+  function colorForScore(score){
+    if (score >= 70) return getComputedStyle(document.documentElement).getPropertyValue('--teal').trim();
+    if (score >= 40) return getComputedStyle(document.documentElement).getPropertyValue('--amber').trim();
+    return getComputedStyle(document.documentElement).getPropertyValue('--red').trim();
+  }
+
+  function updateGauge(score){
+    const offset = CIRC - (CIRC * Math.max(0, Math.min(100, score)) / 100);
+    els.gaugeArc.style.strokeDashoffset = offset;
+    els.gaugeArc.style.stroke = colorForScore(score);
+    els.gaugePct.textContent = Math.round(score) + '%';
+
+    let headline, sub;
+    if (score >= 70){ headline = 'Focused'; sub = 'Present, facing the screen, tab active.'; }
+    else if (score >= 40){ headline = 'Drifting'; sub = 'Attention appears intermittent.'; }
+    else { headline = 'Away or distracted'; sub = 'Face not consistently detected, or tab inactive.'; }
+    els.gaugeHeadline.innerHTML = '<b>' + headline + '</b>';
+    els.gaugeSub.textContent = sub;
+  }
+
+  function drawSparkline(){
+    const canvas = els.spark;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight || 70;
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0,0,w,h);
+
+    const data = state.focusHistory.slice(-120); // last ~2 min at 1/sec
+    if (data.length < 2) return;
+
+    ctx.beginPath();
+    data.forEach((pt, i) => {
+      const x = (i / (data.length - 1)) * w;
+      const y = h - (pt.score / 100) * h;
+      if (i === 0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    });
+    ctx.strokeStyle = '#0F6E56';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath();
+    ctx.fillStyle = 'rgba(15,110,86,0.08)';
+    ctx.fill();
+  }
+
+  function updateStats(){
+    if (state.focusHistory.length){
+      const avg = state.focusHistory.reduce((a,b)=>a+b.score,0) / state.focusHistory.length;
+      els.statAvg.textContent = Math.round(avg) + '%';
+    }
+    const presentPct = state.totalSeconds ? Math.round(100 * state.presentSeconds / state.totalSeconds) : 0;
+    els.statPresent.textContent = presentPct + '%';
+    els.statSwitches.textContent = state.tabSwitches;
+    els.statAnomalies.textContent = state.anomalies;
+    els.privFrames.textContent = state.frameCount.toLocaleString();
+    els.sessionClock.textContent = elapsedClock();
+  }
+
+  // ---------- Head-pose heuristic from landmarks ----------
+  // Uses nose tip vs. eye-midpoint horizontal offset to estimate yaw,
+  // and eye-corner symmetry as a rough proxy for facing-the-camera.
+  function estimateForwardFacing(landmarks){
+    const nose = landmarks[1];
+    const leftEye = landmarks[33];
+    const rightEye = landmarks[263];
+    if (!nose || !leftEye || !rightEye) return false;
+    const midX = (leftEye.x + rightEye.x) / 2;
+    const eyeSpan = Math.abs(rightEye.x - leftEye.x) || 0.001;
+    const yawRatio = Math.abs(nose.x - midX) / eyeSpan;
+    return yawRatio < 0.28; // roughly facing forward
+  }
+
+  // ---------- Sampling loop (1x per second) ----------
+  let currentLandmarks = null;
+  let faceDetected = false;
+
+  function sampleTick(){
+    if (!state.running) return;
+    state.totalSeconds += 1;
+
+    const tabVisible = document.visibilityState === 'visible';
+    let forward = false;
+    if (faceDetected && currentLandmarks) forward = estimateForwardFacing(currentLandmarks);
+
+    const present = faceDetected && tabVisible;
+    if (present) state.presentSeconds += 1;
+
+    // Instant score: weighted signal
+    let instant = 0;
+    if (!tabVisible) instant = 5;
+    else if (!faceDetected) instant = 15;
+    else if (!forward) instant = 45;
+    else instant = 92;
+
+    // Exponential smoothing so the gauge doesn't jitter frame to frame
+    state.smoothedScore = state.smoothedScore === 0 ? instant : (state.smoothedScore * 0.7 + instant * 0.3);
+    state.focusHistory.push({t: Date.now(), score: state.smoothedScore});
+    if (state.focusHistory.length > 600) state.focusHistory.shift();
+
+    // Anomaly heuristic: sustained low focus
+    if (state.smoothedScore < 35 && tabVisible){
+      state.lowFocusStreak += 1;
+      if (state.lowFocusStreak === 15){ // ~15s sustained
+        state.anomalies += 1;
+        logEvent('Sustained low focus for 15s+', 'warn');
+      }
+    } else {
+      state.lowFocusStreak = 0;
+    }
+
+    updateGauge(state.smoothedScore);
+    drawSparkline();
+    updateStats();
+  }
+
+  // ---------- Tab visibility tracking ----------
+  document.addEventListener('visibilitychange', () => {
+    if (!state.running) return;
+    if (document.visibilityState !== 'visible' && state.lastVisible){
+      state.tabSwitches += 1;
+      logEvent('Tab switched away', 'info');
+    } else if (document.visibilityState === 'visible' && !state.lastVisible){
+      logEvent('Returned to tab', 'info');
+    }
+    state.lastVisible = document.visibilityState === 'visible';
+  });
+
+  // ---------- MediaPipe setup ----------
+  async function startSession(){
+    els.startBtn.disabled = true;
+    els.startBtn.textContent = 'Requesting camera…';
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 }, audio: false });
+      els.video.srcObject = stream;
+
+      const faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+      });
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: false,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+      faceMesh.onResults((results) => {
+        state.frameCount += 1;
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0){
+          faceDetected = true;
+          currentLandmarks = results.multiFaceLandmarks[0];
+        } else {
+          faceDetected = false;
+          currentLandmarks = null;
+        }
+        drawOverlay(results);
+      });
+
+      const camera = new Camera(els.video, {
+        onFrame: async () => { await faceMesh.send({image: els.video}); },
+        width: 480,
+        height: 360
+      });
+      camera.start();
+
+      // Reveal app
+      els.gate.style.display = 'none';
+      els.app.style.display = 'block';
+      state.running = true;
+      state.startTime = Date.now();
+      state.lastVisible = document.visibilityState === 'visible';
+      logEvent('Session started — on-device only', 'info');
+
+      setInterval(sampleTick, 1000);
+      setInterval(() => { els.sessionClock.textContent = elapsedClock(); }, 1000);
+
+    } catch(err){
+      els.startBtn.disabled = false;
+      els.startBtn.textContent = 'Enable camera and start session';
+      els.gateError.style.display = 'block';
+      els.gateError.textContent = 'Camera access is required for this prototype: ' + (err.message || err);
+    }
+  }
+
+  function drawOverlay(results){
+    const canvas = els.overlay;
+    const video = els.video;
+    if (canvas.width !== video.videoWidth && video.videoWidth){
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0,0,canvas.width, canvas.height);
+    if (!results.multiFaceLandmarks) return;
+    ctx.fillStyle = 'rgba(93,202,165,0.85)';
+    results.multiFaceLandmarks.forEach(lm => {
+      // sparse sampling of points for a light-weight overlay, not a full mesh
+      for (let i = 0; i < lm.length; i += 6){
+        const p = lm[i];
+        ctx.beginPath();
+        ctx.arc(p.x * canvas.width, p.y * canvas.height, 1.1, 0, Math.PI*2);
+        ctx.fill();
+      }
+    });
+  }
+
+  els.startBtn.addEventListener('click', startSession);
+
+  els.toggleCam.addEventListener('click', () => {
+    state.camVisible = !state.camVisible;
+    els.camBox.style.display = state.camVisible ? 'block' : 'none';
+    els.toggleCam.textContent = state.camVisible ? 'Hide preview' : 'Show preview';
+  });
+
+  window.addEventListener('resize', drawSparkline);
+})();
+</script>
+</body>
+</html>
